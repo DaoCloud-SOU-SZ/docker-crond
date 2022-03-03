@@ -1,0 +1,150 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: push-local-images-secret
+type: Opaque
+data:
+  K8S_TOKEN:
+  REGISTRY_PASSWORD:  
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: push-local-images-envs
+  labels:
+    k8s-app: push-local-images
+data:
+  K8S_SERVER: https://192.168.101.10:16443
+  K8S_NAMESPACE: default
+  REGISTRY_IP: '192.168.101.9'
+  REGISTRY_USERNAME: admin
+  TZ: Asia/Shanghai
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: push-local-images-crontab
+  labels:
+    k8s-app: push-local-images
+data:
+  crontab: |
+    SHELL=/bin/bash
+    BASH_ENV=/etc/environment
+    */5 * * * * root /scripts/push-rmi-local-images.sh
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: push-local-images-scripts
+  labels:
+    k8s-app: push-local-images
+data:
+  push-rmi-local-images.sh: |
+    #!/usr/bin/env bash
+
+    CROND_PID=$(ps -ef | grep cron | grep -Ev 'grep|tini' | awk '{print $2}')
+
+    NODE_NAME=$(kubectl get nodes -owide  | grep $NODE_IP | awk '{print $1}')
+
+    kubectl get pods -A -owide | grep $NODE_NAME | awk '{print "kubectl -n "$1" get pods "$2" -ojson | jq .spec.containers"}' | bash | grep '"image":' >> imgs
+
+    sed -i 's?    "image": "??g' imgs
+    sed -i 's?",??g' imgs
+
+    #images=$(kubectl get pods -A -owide | grep $NODE_NAME | awk '{print "kubectl -n "$1" get pods "$2" -o yaml "}' | bash | grep 'image:' | sed 's?  - image:??g' | sed 's?    image:??g' | grep $REGISTRY_IP)
+    images=$(cat imgs | grep $REGISTRY_IP)
+    docker login $REGISTRY_IP -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD
+    for image in $images
+    do
+      DATE=$(date +'%Y-%m-%d %H:%M:%S')
+      docker push $image > /dev/null
+      echo "$DATE docker push $image" >/proc/${CROND_PID}/fd/1 2>/proc/${CROND_PID}/fd/2
+    done
+
+    rm -rf imgs
+
+    docker rmi $(docker images -f "dangling=true" -q) -f
+
+    docker images | awk '{print "docker rmi "$1":"$2}' | bash
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    k8s-app: push-local-images
+  name: push-local-images
+spec:
+  revisionHistoryLimit: 10
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      k8s-app: push-local-images
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        k8s-app: push-local-images
+    spec:
+      volumes:
+      - configMap:
+          defaultMode: 0755
+          name: push-local-images-scripts
+        name: scripts
+      - configMap:
+          defaultMode: 0755
+          name: push-local-images-crontab
+          items:
+          - key: crontab
+            path: crontab
+        name: crontab
+      - hostPath:
+          path: /var/run/docker.sock
+          type: "FileOrCreate"
+        name: docker-sock
+      - hostPath:
+          path: /usr/bin/docker
+          type: "FileOrCreate"
+        name: docker-bin
+      dnsPolicy: ClusterFirst
+      containers:
+      - name: push-local-images
+        image: 192.168.101.9/daocloud/cron:v0.0.3
+        imagePullPolicy: IfNotPresent
+        envFrom:
+        - secretRef:
+            name: push-local-images-secret
+        - configMapRef:
+            name: push-local-images-envs
+        env:
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 125m
+            memory: 512Mi
+        volumeMounts:
+        - mountPath: /usr/bin/docker
+          name: docker-bin
+        - mountPath: /var/run/docker.sock
+          name: docker-sock
+        - mountPath: /scripts
+          name: scripts
+        - mountPath: /etc/crontab
+          name: crontab
+          subPath: crontab
+      tolerations:
+      - effect: NoExecute
+        operator: Exists
+      - effect: NoSchedule
+        operator: Exists
+      - key: CriticalAddonsOnly
+        operator: Exists
