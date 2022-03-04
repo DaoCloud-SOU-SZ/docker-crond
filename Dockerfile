@@ -8,7 +8,7 @@ COPY . .
 
 RUN sed -i 's?deb.debian.org?mirrors.aliyun.com?g' /etc/apt/sources.list \
 #  && sed -i 's?security.debian.org?mirrors.aliyun.com?g' /etc/apt/sources.list \
- && apt-get update && apt-get install -y cron \
+ && apt-get update && apt-get install -y cron skopeo \
  && curl -L https://get.helm.sh/helm-v3.8.0-linux-amd64.tar.gz -o /helm-v3.8.0-linux-amd64.tar.gz \
  && curl -L https://tuf.kubedog.werf.io/targets/releases/0.6.3/linux-amd64/bin/kubedog -o /usr/local/bin/kubedog \
  && curl -L https://github.com/krallin/tini/releases/download/v0.19.0/tini -o /usr/local/bin/tini \
