@@ -1,6 +1,8 @@
 FROM bitnami/kubectl:1.18.19
 
-ENV TINI_VERSION=v0.19.0
+ENV TINI_VERSION=v0.19.0 \
+    HELM_VERSION=v3.8.0 \
+    KUBEDOG_VERSION=v0.6.3 
 
 USER root
 
